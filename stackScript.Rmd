@@ -1,0 +1,1749 @@
+<<<<<<< HEAD
+---
+title: "stackScript"
+author: "Sean"
+date: "8/10/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Stack Overflow Data Analysis
+
+### Loading Data
+
+```{r}
+# load mongo library
+library(mongolite)
+
+# connect to local dbs
+mongo_local <- mongo(collection = "stack_a", db = "mydb", url =
+                       "mongodb://localhost:27017")
+mongo_local_q <- mongo(collection = "stack_q", db = "mydb", url =
+                         "mongodb://localhost:27017")
+mongo_local_c <- mongo(collection = "stack_c", db = "mydb", url =
+                         "mongodb://localhost:27017")
+mongo_local_ac <- mongo(collection = "stack_ac", db = "mydb", url =
+                         "mongodb://localhost:27017")
+
+# pull data for analysis
+big_a <- mongo_local$find()
+big_q <- mongo_local_q$find()
+big_c <- mongo_local_c$find()
+big_ac <- mongo_local_ac$find()
+
+# remove any duplicates
+library(dplyr)
+big_q <- big_q %>%
+  distinct(question_id, .keep_all=TRUE)
+
+big_a <- big_a %>%
+  distinct(body, .keep_all=TRUE)
+
+big_ac <- big_ac %>%
+  distinct(body, .keep_all = TRUE)
+
+big_c <- big_c %>%
+  distinct(body, .keep_all = TRUE)
+
+```
+
+### Massaging Data (mostly date) information
+
+```{r}
+
+library(lubridate)
+big_a$creation_date <- as_datetime(big_a$creation_date)
+big_q$creation_date <- as_datetime(big_q$creation_date)
+big_q$last_activity_date <- as_datetime(big_q$last_activity_date)
+big_a$last_activity_date <- as_datetime(big_a$last_activity_date)
+big_c$creation_date <- as_datetime(big_c$creation_date)
+big_ac$creation_date <- as_datetime(big_ac$creation_date)
+
+# fix so user id of na = User{id}
+a <- grep("^user[0-9]+", big_q$user$display_name)
+big_q[a,]$user$user_id <- gsub("^user([0-9]+)", perl = TRUE, replacement = '\\1', big_q[a,]$user$display_name)
+
+b <- grep("^user[0-9]+", big_a$user$display_name)
+big_a[b,]$user$user_id <- gsub("^user([0-9]+)", perl = TRUE, replacement = '\\1', big_a[b,]$user$display_name)
+
+nas <- which(is.na(big_q$user$user_id) == TRUE)
+big_q[nas,]$user$user_id <- big_q[nas,]$user$display_name
+
+anas <- which(is.na(big_a$user$user_id) == TRUE)
+big_a[anas,]$user$user_id <- big_a[anas,]$user$display_name
+
+```
+
+### Metadata Analysis
+
+```{r}
+
+# collecting unanswered
+no_answers <- big_q[which(big_q$answer_count == 0),]
+
+# collecting has answers
+has_answers <- big_q[which(big_q$answer_count >= 1),]
+
+# proportion of answered over total
+has_answers_over_total <-
+  length(has_answers$comment_count)/length(big_q$comment_count) # 87%
+
+# collection of those with answers still labelled False
+has_false_answered <- has_answers[which(has_answers$is_answered == FALSE),]
+length(has_false_answered$comment_count)/length(big_q$comment_count)
+
+# proportion of is_answered over has answered subset
+is_answerd_over_has <-
+  length(has_false_answered$comment_count)/length(has_answers$comment_count)
+# 13%
+
+# collecting is_answered = true and divining interaction
+true_answered <- big_q[which(big_q$is_answered == TRUE),]
+
+# proportion of is_answered true to total set
+true_total_prop <- length(true_answered$comment_count)/length(big_q$comment_count) # 76%
+false_answered <- big_q[which(big_q$is_answered == FALSE),]
+false_answered_ans <- subset(false_answered, answer_count > 0)
+length(false_answered_ans$comment_count)/length(false_answered$comment_count) # .4761027
+
+# answers from true_answered
+true_from_answers <- big_a[which(big_a$title %in% true_answered$title),]
+
+# arrange by title and creation date
+arr_true_ans <- true_from_answers %>%
+  arrange(title, creation_date)
+
+# use list of question to title to find which answer (if more than one) pushed to answered = true
+title_list <- as.list(true_answered$title)
+ans_true_index <- lapply(title_list, function(x){
+  tmp <- arr_true_ans[which(arr_true_ans$title == x),]
+  first_ans_score <- tmp[1,]$score
+  answer <- ifelse(first_ans_score > 0, 'first answer is answer', 'not answer')
+  return(answer)
+})
+
+true_one <- subset(true_answered, answer_count == 1)
+true_more <- subset(true_answered, answer_count > 1)
+true_answered$which_answer <- ans_true_index
+
+# find proportion of questions marked true for is_answered that had first answer do that
+first <- subset(true_answered, which_answer == 'first answer is answer')
+prop_first_over_total <- length(first$comment_count)/length(true_answered$comment_count) # 81%
+
+# find those that do not have first answer as answer
+not_first <- subset(true_answered, which_answer == 'not answer')
+
+mult_ans <- subset(true_answered, answer_count > 1)
+length(mult_ans$comment_count)/length(true_answered$comment_count)
+
+# find how many Qs have more answers after first
+first_mult_answers <- subset(first, answer_count > 1)
+prop_first_mult_ans <- length(first_mult_answers$comment_count)/length(true_answered$comment_count) # 37%
+
+not_first_mult <- subset(not_first, answer_count > 2)
+prop_not_mult_ans <- length(not_first_mult$comment_count)/length(not_first$comment_count) # 5%
+
+# compare to those that have false for is_answered
+false_mult_ans <- subset(has_false_answered, answer_count > 1)
+prop_false_mult_ans <- length(false_mult_ans$comment_count)/length(has_false_answered$comment_count) #21% of subset
+
+# find statistical info about both sets
+mean_sd_false <- has_false_answered %>%
+  summarise(
+    mean_count = mean(answer_count),
+    sd_count = sd(answer_count),
+    min_count = min(answer_count),
+    max_count = max(answer_count),
+  )
+
+mean_sd_true <- true_answered %>%
+  summarise(
+    mean_count = mean(answer_count),
+    sd_count = sd(answer_count),
+    min_count = min(answer_count),
+    max_count = max(answer_count),
+  )
+
+mean_sd_true # mean = 1.89, sd = 1.43, min = 1, max = 31
+mean_sd_false # mean = 1.26, sd = 0.56, min = 1, max = 6
+
+```
+
+## Parsing tag info
+
+```{r}
+# using those that are answerd and those that have answers but not marked answered
+
+# coerce lists of tags to vectors
+true_answered_tags <- unlist(true_answered$tags)
+
+has_false_answered_tags <- unlist(has_false_answered$tags)
+
+no_answer_tags <- unlist(no_answers$tags)
+
+# coerce to tibble
+true_tags_tibble <- tibble("true_tags" = true_answered_tags)
+false_tags_tibble <- tibble("false_tags" = has_false_answered_tags)
+no_ans_tag_tibble <- tibble("no_ans_tags" = no_answer_tags)
+
+t_tags_count <- true_tags_tibble %>%
+  count(true_tags, sort = TRUE)
+
+t_tags_count <- t_tags_count[-1,]
+
+t_tags_count$rel <- t_tags_count$n/length(true_tags_tibble$true_tags)
+
+f_tags_count <- false_tags_tibble %>%
+  count(false_tags, sort = TRUE)
+
+f_tags_count <- f_tags_count[-1,]
+
+f_tags_count$rel <- f_tags_count$n/length(false_tags_tibble$false_tags)
+
+no_ans_count <- no_ans_tag_tibble %>%
+  count(no_ans_tags, sort = TRUE)
+
+no_ans_count <- no_ans_count[-1,]
+
+no_ans_count$rel <- no_ans_count$n/length(no_ans_tag_tibble$no_ans_tags)
+
+library(ggplot2)
+plt_1 <- t_tags_count %>%
+  head(15) %>%
+  ggplot(aes(x = true_tags, y = rel)) +
+  geom_col() +
+  labs(x = "Tag Names", y = "Relative Frequencies",
+       title = NULL) +
+  coord_flip()
+plt_1
+
+plt_2 <- f_tags_count %>%
+  head(15) %>%
+  ggplot(aes(x = false_tags, y = rel)) +
+  geom_col() +
+  labs(x = "Tag Names", y = "Relative Frequencies",
+       title = NULL) +
+  coord_flip()
+
+plt_3 <- no_ans_count %>%
+  head(15) %>%
+  ggplot(aes(x = no_ans_tags, y = rel)) +
+  geom_col() +
+  labs(x = "Tag Names", y = "Relative Frequencies",
+       title = NULL) +
+  coord_flip()
+
+library(cowplot)
+
+f_plot <- plot_grid(plt_1, plt_2, plt_3, labels = "AUTO")
+f_plot
+save_plot('tagsPlot.jpg', f_plot)
+
+```
+
+## Pulling out code fragments
+
+```{r}
+
+library(stringr)
+# pull out code into separate column
+code <- str_locate_all(true_answered$body, "<code>")
+code_end <- str_locate_all(true_answered$body, "<\\/code>")
+
+code_frags <- tibble()
+
+for(i in 1:length(code)){
+  i_val <- length(code[[i]])/2
+  if(i_val == 0){
+  }
+  else{
+    for(j in 1:i_val){
+      code_list <- tibble("title" = true_answered$title[i], "code" = substring(true_answered$body[i],
+                                                                               code[[i]][j,2]+1,
+                                                                               code_end[[i]][j,1]-1))
+      code_frags <- rbind(code_frags, code_list)   
+    }
+  }
+}
+
+# get number of code fragments per question
+num_code_frags <- code_frags %>%
+  group_by(title) %>%
+  tally()
+
+stats_code_frags <- num_code_frags %>%
+  summarise(
+    mean_code_frags = mean(n),
+    sd_code_frags = sd(n),
+    min_code_frags = min(n),
+    max_code_frags = max(n)
+  )
+
+# mean: 3.504323,	sd: 3.286319,	min: 1,	max: 70
+
+write.csv(code_frags, 'code_frags.csv')
+#code_frags <- read.csv('code_frags.csv', stringsAsFactors = F)
+
+```
+
+## Has answers but not "answered" code frags
+
+```{r}
+
+# pull out code into separate column
+hf_code <- str_locate_all(has_false_answered$body, "<code>")
+hf_code_end <- str_locate_all(has_false_answered$body, "<\\/code>")
+
+hf_code_frags <- tibble()
+
+for(i in 1:length(hf_code)){
+  i_val <- length(hf_code[[i]])/2
+  if(i_val == 0){
+  }
+  else{
+    for(j in 1:i_val){
+    hf_code_list <- tibble("title" = has_false_answered$title[i], "code" = substring(has_false_answered$body[i],
+                                                                                     hf_code[[i]][j,2]+1,
+                                                                                     hf_code_end[[i]][j,1]-1))
+    hf_code_frags <- rbind(hf_code_frags, hf_code_list)   
+    }
+  }
+}
+
+# get number of code fragments per question
+num_hf_code_frags <- hf_code_frags %>%
+  group_by(title) %>%
+  tally()
+
+hf_stats_code_frags <- num_hf_code_frags %>%
+  summarise(
+    mean_code_frags = mean(n),
+    sd_code_frags = sd(n),
+    min_code_frags = min(n),
+    max_code_frags = max(n)
+  )
+
+write.csv(hf_code_frags, 'hf_code_frags.csv')
+# hf_code_frags <- read.csv("hf_code_frags.csv", stringsAsFactors = F)
+# mean: 3.148204	sd: 3.00185	min: 1	max: 47
+
+```
+
+## no answers code frags
+
+```{r}
+library(stringr)
+# pull out code into separate column
+no_code <- str_locate_all(no_answers$body, "<code>")
+no_code_end <- str_locate_all(no_answers$body, "<\\/code>")
+
+no_code_frags <- tibble()
+
+for(i in 1:length(no_code)){
+  i_val <- length(no_code[[i]])/2
+  if(i_val == 0){
+  }
+  else{
+    for(j in 1:i_val){
+    no_code_list <- tibble("title" = no_answers$title[i], "code" = substring(no_answers$body[i],
+                                                                                     no_code[[i]][j,2]+1,
+                                                                                     no_code_end[[i]][j,1]-1))
+    no_code_frags <- rbind(no_code_frags, no_code_list)   
+    }
+  }
+}
+
+# get number of code fragments per question
+num_no_code_frags <- no_code_frags %>%
+  group_by(title) %>%
+  tally()
+
+no_stats_code_frags <- num_no_code_frags %>%
+  summarise(
+    mean_code_frags = mean(n),
+    sd_code_frags = sd(n),
+    min_code_frags = min(n),
+    max_code_frags = max(n)
+  )
+
+write.csv(no_code_frags, 'no_code_frags.csv')
+no_code_frags <- read.csv('no_code_frags.csv', stringsAsFactors = F)
+
+stats_no_code_frags <- num_no_code_frags %>%
+  summarise(
+    mean_code_frags = mean(n),
+    sd_code_frags = sd(n),
+    min_code_frags = min(n),
+    max_code_frags = max(n)
+  )
+stats_no_code_frags
+# mean = 3.38, sd = 3.14, min = 1, max = 29
+
+```
+
+## paste code frags and 
+
+```{r}
+
+library(tidytext)
+library(ggplot2)
+library(dplyr)
+
+code_frags_clean <- code_frags %>%
+  unnest_tokens(word, code)
+
+hf_code_frags_clean <- hf_code_frags %>%
+  unnest_tokens(word, code)
+
+no_code_frag_clean <- no_code_frags %>%
+  unnest_tokens(word, code)
+
+# count and plot
+code_frags_clean %>%
+  count(word, sort = TRUE) %>%
+  top_n(15) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(x = word, y = n)) +
+  geom_col() +
+  xlab(NULL) +
+  coord_flip() +
+  labs(x = "Count",
+       y = "Unique Words",
+       title = "Count of unique words from stack overflow code")
+
+# count and plot
+hf_code_frags_clean %>%
+  count(word, sort = TRUE) %>%
+  top_n(15) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(x = word, y = n)) +
+  geom_col() +
+  xlab(NULL) +
+  coord_flip() +
+  labs(x = "Count",
+       y = "Unique Words",
+       title = "Count of unique words from stack overflow code")
+
+# exploring networks
+library(widyr)
+library(tidytext)
+code_clean_paired <- code_frags %>%
+  unnest_tokens(paired_words, code, token = "ngrams", n = 2) %>%
+  na.omit()
+
+hf_clean_paired <- hf_code_frags %>%
+  unnest_tokens(paired_words, code, token = "ngrams", n = 2) %>%
+  na.omit()
+
+no_clean_paired <- no_code_frags %>%
+  unnest_tokens(paired_words, code, token = "ngrams", n = 2) %>%
+  na.omit()
+
+# separate words
+library(tidyr)
+code_separated_words <- code_clean_paired %>%
+  separate(paired_words, c("word1", "word2"), sep = " ") %>%
+    filter(word1 == "import" | word1 == "from")
+
+hf_code_sep_words <- hf_clean_paired %>%
+  separate(paired_words, c("word1", "word2"), sep = " ") %>%
+  filter(word1 == "import" | word1 == "from")
+
+no_code_sep_words <- no_clean_paired %>%
+  separate(paired_words, c("word1", "word2"), sep = " ") %>%
+  filter(word1 == "import" | word1 == "from")
+
+
+# new bigram counts
+code_words_counts <- code_separated_words %>%
+  count(word1, word2, sort = TRUE) %>%
+  unite("paired_words", c(word1, word2), sep = " ")
+
+hf_code_counts <- hf_code_sep_words %>%
+  count(word1, word2, sort = TRUE) %>%
+  unite("paired_words", c(word1, word2), sep = " ")
+
+no_code_counts <- no_code_sep_words %>%
+  count(word1, word2, sort = TRUE) %>%
+  unite("paired_words", c(word1, word2), sep = " ")
+
+```
+
+## Plotting the Data
+
+```{r}
+library(ggplot2)
+
+top_20_code <- code_words_counts %>%
+  head(20)
+
+top_20_hf <- hf_code_counts %>%
+  head(20)
+
+top_20_no <- no_code_counts %>%
+  head(20)
+
+write.csv(top_20_code, "top_20_out_code.csv")
+write.csv(top_20_hf, "top_20_out_hf.csv")
+write.csv(top_20_no, "top_20_out_no.csv")
+
+# top_20_code <- read.csv("top_20_code.csv", stringsAsFactors = F)
+# top_20_hf <- read.csv("top_20_hf.csv", stringsAsFactors = F)
+# top_20_no <- read.csv("top_20_no.csv", stringsAsFactors = F)
+
+top_20_code
+top_20_hf
+top_20_no
+
+```
+
+```{r}
+
+# get names of imports for analysis
+code_lab_names <- lapply(top_20_code$paired_words, function(x){
+  x <- strsplit(x, split = " ")[[1]][2]
+  return(x)
+})
+
+hf_lab_names <- lapply(top_20_hf$paired_words, function(x){
+  x <- strsplit(x, split = " ")[[1]][2]
+  return(x)
+})
+
+no_lab_names <- lapply(top_20_no$paired_words, function(x){
+  x <- strsplit(x, split = " ")[[1]][2]
+  return(x)
+})
+
+# preparing plots
+top_20_code$names <- unlist(code_lab_names)
+top_20_hf$names <- unlist(hf_lab_names)
+top_20_no$names <- unlist(no_lab_names)
+
+top_20_code$rel <- top_20_code$n/sum(code_words_counts$n)
+top_20_hf$rel <- top_20_hf$n/sum(hf_code_counts$n)
+top_20_no$rel <- top_20_no$n/sum(no_code_counts$n)
+
+library(ggplot2)
+plot_1 <- top_20_code %>%
+  ggplot(aes(x = names, y = rel)) +
+  geom_col() +
+  labs(x = "Packages", y = "Relative Frequencies",
+       title = NULL) +
+  coord_flip()
+
+plot_2 <- top_20_hf %>%
+  ggplot(aes(x = names, y = rel)) +
+  geom_col() +
+  labs(x = "Packages", y = "Relative Frequencies",
+       title = NULL) +
+  coord_flip()
+
+plot_3 <- top_20_no %>%
+  ggplot(aes(x = names, y = rel)) +
+  geom_col() +
+  labs(x = "Packages", y = "Relative Frequencies",
+       title = NULL) +
+  coord_flip()
+
+library(cowplot)
+
+fi_plot <- plot_grid(plot_1, plot_2, plot_3, labels = "AUTO")
+save_plot('importsPlot.jpg', fi_plot)
+
+```
+
+## now let's do def and classes
+
+```{r}
+
+# separate words
+library(tidyr)
+code_sep_words <- code_clean_paired %>%
+  separate(paired_words, c("word1", "word2"), sep = " ") %>%
+    filter(word1 == "def" | word1 == "class")
+
+hf_sep_words <- hf_clean_paired %>%
+  separate(paired_words, c("word1", "word2"), sep = " ") %>%
+  filter(word1 == "def" | word1 == "class")
+
+no_sep_words <- no_clean_paired %>%
+  separate(paired_words, c("word1", "word2"), sep = " ") %>%
+  filter(word1 == "def" | word1 == "class")
+
+# new bigram counts
+code_words_class_counts <- code_sep_words %>%
+  count(word1, word2, sort = TRUE) %>%
+  unite("paired_words", c(word1, word2), sep = " ")
+
+hf_code_class_counts <- hf_sep_words %>%
+  count(word1, word2, sort = TRUE) %>%
+  unite("paired_words", c(word1, word2), sep = " ")
+
+no_code_class_counts <- no_sep_words %>%
+  count(word1, word2, sort = TRUE) %>%
+  unite("paired_words", c(word1, word2), sep = " ")
+
+```
+
+## Preparing to Plot
+
+```{r}
+
+library(ggplot2)
+
+top_20_class_code <- code_words_class_counts %>%
+  head(15)
+
+top_20_class_hf <- hf_code_class_counts %>%
+  head(15)
+
+top_20_class_no <- no_code_class_counts %>%
+  head(15)
+
+write.csv(top_20_class_code, "top_20_class_code.csv")
+write.csv(top_20_class_hf, "top_20_class_hf.csv")
+write.csv(top_20_class_no, "top_20_class_no.csv")
+
+# top_20_code <- read.csv("top_20_code.csv", stringsAsFactors = F)
+# top_20_hf <- read.csv("top_20_hf.csv", stringsAsFactors = F)
+# top_20_no <- read.csv("top_20_no.csv", stringsAsFactors = F)
+
+top_20_class_code
+top_20_class_hf
+top_20_class_no
+
+```
+
+## Plottings!
+
+```{r}
+
+# get names of imports for analysis
+code_lab_class_names <- lapply(top_20_class_code$paired_words, function(x){
+  x <- strsplit(x, split = " ")[[1]][2]
+  return(x)
+})
+
+hf_lab_class_names <- lapply(top_20_class_hf$paired_words, function(x){
+  x <- strsplit(x, split = " ")[[1]][2]
+  return(x)
+})
+
+no_lab_class_names <- lapply(top_20_class_no$paired_words, function(x){
+  x <- strsplit(x, split = " ")[[1]][2]
+  return(x)
+})
+
+# preparing plots
+top_20_class_code$names <- unlist(code_lab_class_names)
+top_20_class_hf$names <- unlist(hf_lab_class_names)
+top_20_class_no$names <- unlist(no_lab_class_names)
+
+top_20_class_code$rel <- top_20_class_code$n/sum(code_words_class_counts$n)
+top_20_class_hf$rel <- top_20_class_hf$n/sum(hf_code_class_counts$n)
+top_20_class_no$rel <- top_20_class_no$n/sum(no_code_class_counts$n)
+
+library(ggplot2)
+plot_1 <- top_20_class_code %>%
+  ggplot(aes(x = names, y = rel)) +
+  geom_col() +
+  labs(x = "Declarations", y = "Relative Frequencies",
+       title = NULL) +
+  coord_flip()
+
+plot_2 <- top_20_class_hf %>%
+  ggplot(aes(x = names, y = rel)) +
+  geom_col() +
+  labs(x = "Declarations", y = "Relative Frequencies",
+       title = NULL) +
+  coord_flip()
+
+plot_3 <- top_20_class_no %>%
+  ggplot(aes(x = names, y = rel)) +
+  geom_col() +
+  labs(x = "Declarations", y = "Relative Frequencies",
+       title = NULL) +
+  coord_flip()
+
+library(cowplot)
+
+final_plot <- plot_grid(plot_1, plot_2, plot_3, labels = "AUTO")
+save_plot('declarationsPlot.jpg', final_plot)
+final_plot
+
+```
+
+## Check for Duplicates?
+
+```{r}
+length(true_answered$comment_count) +
+length(has_false_answered$comment_count) +
+length(no_answers$comment_count)
+
+```
+
+# What Can Topic Modelling Show Us?
+
+In the words of literary scholar and digital humanist Paul Barrett, Topic Modeling is:
+
+"...a form of unsupervised machine learning. It is a kind of text mining that doesn't search for particular, predetermined content, but instead 'reads' an entire corpus and extracts a set of topics. Its unclear, and a point of debate, whether the topics are read / discovered from the corpus or whether the topics are 'asserted' as a description of the corpus."
+
+At this stage of my research, I'm wanting to understand perhaps how many comments have to do with coding and if other types of topics emerge. In essence, could topic modeling, a form of unsupervised, natural language processing learning, help me discover communicaction objects centered around coding concepts and those that are not?
+
+To get started, I need to reshape some of the data and determine the number of clusters the model should make.
+
+```{r}
+# STM topic model performance evaluation
+library(tidytext)
+library(dplyr)
+library(tidyr)
+
+# for now, just considering SO comments (answe comments)
+dset <- big_ac
+dset$ID <- 1:nrow(big_ac)
+
+```
+
+```{r}
+dset$body <- gsub("<code>", '', dset$body)
+dset$body <- gsub("</code>", '', dset$body)
+
+```
+
+```{r}
+# get word frequency counts for comments
+tidy_dset <- dset %>%
+  unnest_tokens(word, body) %>%
+  anti_join(get_stopwords()) %>%
+  add_count(word) %>%
+  filter(n > 100) %>%
+  select(-n)
+
+# generate sparse document term matrices
+comments_sparse <- tidy_dset %>%
+  count(ID, word) %>%
+  cast_sparse(ID, word, n)
+
+library(stm)
+library(furrr)
+
+# run our structural topic models with a bunch of different topics for evaluation later
+library(topicmodels)
+set.seed(1234)
+many_models <- tibble(K = c(10, 20, 30, 40, 50, 60, 70, 80, 100, 120, 150, 200)) %>%
+  mutate(topic_model = future_map(K,
+                                  ~stm(comments_sparse, K = .,
+                                       verbose = FALSE, init.type='LDA')))
+
+# create heldout test sets for evaluation and model performance diagnostics
+heldout <- make.heldout(comments_sparse)
+
+```
+
+Now we need to determine the number of topic models to make for charted and uncharted songs.
+
+```{r}
+
+# evaluate our many models for charted based on semantic coherence, heldout likelihood, residual performance, and lower bound
+# through research, I discovered that the metrics sought here are good indicators of different model sizes' success.
+k_result <- many_models %>%
+  mutate(exclusivity = map(topic_model, exclusivity),
+         semantic_coherence = map(topic_model, semanticCoherence, comments_sparse),
+         eval_heldout = map(topic_model, eval.heldout, heldout$missing),
+         residual = map(topic_model, checkResiduals, comments_sparse),
+         bound =  map_dbl(topic_model, function(x) max(x$convergence$bound)),
+         lfact = map_dbl(topic_model, function(x) lfactorial(x$settings$dim$K)),
+         lbound = bound + lfact,
+         # set iterations to length of bound
+         iterations = map_dbl(topic_model, function(x) length(x$convergence$bound)))
+
+# plotting diagnostics
+diag_1 <- k_result %>%
+  transmute(K,
+            `Lower bound` = lbound,
+            Residuals = map_dbl(residual, "dispersion"),
+            `Semantic coherence` = map_dbl(semantic_coherence, mean),
+            `Held-out likelihood` = map_dbl(eval_heldout, "expected.heldout")) %>%
+  gather(Metric, Value, -K) %>%
+  ggplot(aes(K, Value, color = Metric)) +
+  geom_line(size = 1.5, alpha = 0.7, show.legend = FALSE) +
+  facet_wrap(~Metric, scales = "free_y") +
+  labs(x = "K (number of topics)",
+       y = NULL,
+       title = "Model diagnostics by number of topics")
+
+save_plot('model_diagnostics.jpg', diag_1)
+
+# plotting sematic coherence against exclusivity to choose number of topics
+diag_2 <- k_result %>%
+  select(K, exclusivity, semantic_coherence) %>%
+  filter(K %in% c(10, 20, 40, 50, 60, 70, 80, 100, 120, 150)) %>%
+  unnest() %>%
+  mutate(K = as.factor(K)) %>%
+  ggplot(aes(semantic_coherence, exclusivity, color = K)) +
+  geom_point(size = 2, alpha = 0.7) +
+  labs(x = "Semantic coherence",
+       y = "Exclusivity",
+       title = "Comparing exclusivity and semantic coherence among answer comments",
+       subtitle = "Models with fewer topics have higher semantic coherence for more topics, but lower exclusivity")
+
+save_plot('semantic_exclusivity.jpg', diag_2)
+
+```
+
+We're checking for a lot with these graphs. Semantic coherence measures the frequency of probable words in a given topic co-occurring together across our corpus. We want that to be high when determining the number of topics to make. We also want held-out likelihood to be high, meaning that the topic model will perform well on data that we have withheld from the model for testing. We want our residuals to be low though. Based on this first graph, we might be okay setting # topics for our model. The second graph, which plots exclusivity scores against semantic coherence scores, seems to suggest this too. As you can see the grouping of dots that have the highest exclusivity (highest degree of exclusion among words per topics) and highest semantic coherence represent our model when trained with # clusters. So, let's build our new model with # clusters and see some results!
+
+```{r}
+# choosing topic model with best number of topics
+topic_model <- k_result %>%
+  filter(K == 120) %>%
+  pull(topic_model) %>%
+  .[[1]]
+
+topic_model
+
+# separate charted topic model into beta and gamma
+td_beta <- tidy(topic_model)
+
+td_gamma <- tidy(topic_model, matrix = "gamma",
+                 document_names =
+                   rownames(comments_sparse))
+
+#plotting words
+library(ggthemes)
+library(dplyr)
+library(tidyverse)
+library(scales)
+library(knitr)
+
+# derive top terms from beta
+top_terms <- td_beta %>%
+  arrange(beta) %>%
+  group_by(topic) %>%
+  top_n(10, beta) %>%
+  arrange(-beta) %>%
+  select(topic, term) %>%
+  summarise(terms = list(term)) %>%
+  mutate(terms = map(terms, paste, collapse = ", ")) %>% 
+  unnest()
+
+# derive distribution information from gamma scores
+gamma_terms <- td_gamma %>%
+  group_by(topic) %>%
+  summarise(gamma = mean(gamma)) %>%
+  arrange(desc(gamma)) %>%
+  left_join(top_terms, by = "topic") %>%
+  mutate(topic = paste0("Topic ", topic),
+         topic = reorder(topic, gamma))
+
+# get top 20 topics by gamma scores
+gamma_terms %>%
+  top_n(20, gamma) %>%
+  ggplot(aes(topic, gamma, label = terms, fill = topic)) +
+  geom_col(show.legend = FALSE) +
+  geom_text(hjust = 0, nudge_y = 0.0005, size = 3) +
+  coord_flip() +
+  scale_y_continuous(expand = c(0,0),
+                     limits = c(0, 0.09),
+                     labels = percent_format()) +
+  theme_tufte(ticks = FALSE) +
+  theme(plot.title = element_text(size = 16),
+        plot.subtitle = element_text(size = 13)) +
+  labs(x = NULL, y = expression(gamma),
+       title = "Top 20 topics by prevalence in the Stack Overflow Python thread",
+       subtitle = "With the top words that contribute to each topic")
+
+gamma_terms %>%
+  select(topic, gamma, terms) %>%
+  kable(digits = 3, 
+        col.names = c("Topic", "Expected topic proportion", "Top 7 terms"))
+
+```
+
+=======
+---
+title: "stackScript"
+author: "Sean"
+date: "8/10/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Stack Overflow Data Analysis
+
+### Loading Data
+
+```{r}
+# load mongo library
+library(mongolite)
+
+# connect to local dbs
+mongo_local <- mongo(collection = "stack_a", db = "mydb", url =
+                       "mongodb://localhost:27017")
+mongo_local_q <- mongo(collection = "stack_q", db = "mydb", url =
+                         "mongodb://localhost:27017")
+mongo_local_c <- mongo(collection = "stack_c", db = "mydb", url =
+                         "mongodb://localhost:27017")
+mongo_local_ac <- mongo(collection = "stack_ac", db = "mydb", url =
+                         "mongodb://localhost:27017")
+
+# pull data for analysis
+big_a <- mongo_local$find()
+big_q <- mongo_local_q$find()
+big_c <- mongo_local_c$find()
+big_ac <- mongo_local_ac$find()
+
+# remove any duplicates
+library(dplyr)
+big_q <- big_q %>%
+  distinct(question_id, .keep_all=TRUE)
+
+big_a <- big_a %>%
+  distinct(body, .keep_all=TRUE)
+
+big_ac <- big_ac %>%
+  distinct(body, .keep_all = TRUE)
+
+big_c <- big_c %>%
+  distinct(body, .keep_all = TRUE)
+
+```
+
+### Massaging Data (mostly date) information
+
+```{r}
+
+library(lubridate)
+big_a$creation_date <- as_datetime(big_a$creation_date)
+big_q$creation_date <- as_datetime(big_q$creation_date)
+big_q$last_activity_date <- as_datetime(big_q$last_activity_date)
+big_a$last_activity_date <- as_datetime(big_a$last_activity_date)
+big_c$creation_date <- as_datetime(big_c$creation_date)
+big_ac$creation_date <- as_datetime(big_ac$creation_date)
+
+# fix so user id of na = User{id}
+a <- grep("^user[0-9]+", big_q$user$display_name)
+big_q[a,]$user$user_id <- gsub("^user([0-9]+)", perl = TRUE, replacement = '\\1', big_q[a,]$user$display_name)
+
+b <- grep("^user[0-9]+", big_a$user$display_name)
+big_a[b,]$user$user_id <- gsub("^user([0-9]+)", perl = TRUE, replacement = '\\1', big_a[b,]$user$display_name)
+
+nas <- which(is.na(big_q$user$user_id) == TRUE)
+big_q[nas,]$user$user_id <- big_q[nas,]$user$display_name
+
+anas <- which(is.na(big_a$user$user_id) == TRUE)
+big_a[anas,]$user$user_id <- big_a[anas,]$user$display_name
+
+# remove comments object
+big_a <- big_a[1:length(big_a)-1]
+
+# remove editor object and badge object
+big_q <- big_q[,c(2:18)]
+
+# write statements
+write.csv(big_a, 'so_answers.csv')
+write.csv(big_ac, 'so_answer_comments.csv')
+write.csv(big_c, 'so_question_comments.csv')
+write.csv(big_q, 'so_questions.csv')
+
+# for those following along, read in manipulated and separated data
+big_a <- read.csv('so_answers.csv')
+big_ac <- read.csv('so_answer_comments.csv')
+big_c <- read.csv('so_question_comments.csv')
+big_q <- read.csv('so_questions.csv')
+
+```
+
+### Metadata Analysis
+
+```{r}
+
+# collecting unanswered
+no_answers <- big_q[which(big_q$answer_count == 0),]
+
+# collecting has answers
+has_answers <- big_q[which(big_q$answer_count >= 1),]
+
+# proportion of answered over total
+has_answers_over_total <-
+  length(has_answers$comment_count)/length(big_q$comment_count) # 87%
+
+# collection of those with answers still labelled False
+has_false_answered <- has_answers[which(has_answers$is_answered == FALSE),]
+length(has_false_answered$comment_count)/length(big_q$comment_count)
+
+# proportion of is_answered over has answered subset
+is_answerd_over_has <-
+  length(has_false_answered$comment_count)/length(has_answers$comment_count)
+# 13%
+
+# collecting is_answered = true and divining interaction
+true_answered <- big_q[which(big_q$is_answered == TRUE),]
+
+# proportion of is_answered true to total set
+true_total_prop <- length(true_answered$comment_count)/length(big_q$comment_count) # 76%
+false_answered <- big_q[which(big_q$is_answered == FALSE),]
+false_answered_ans <- subset(false_answered, answer_count > 0)
+length(false_answered_ans$comment_count)/length(false_answered$comment_count) # .4761027
+
+# answers from true_answered
+true_from_answers <- big_a[which(big_a$title %in% true_answered$title),]
+
+# arrange by title and creation date
+arr_true_ans <- true_from_answers %>%
+  arrange(title, creation_date)
+
+# use list of question to title to find which answer (if more than one) pushed to answered = true
+title_list <- as.list(true_answered$title)
+ans_true_index <- lapply(title_list, function(x){
+  tmp <- arr_true_ans[which(arr_true_ans$title == x),]
+  first_ans_score <- tmp[1,]$score
+  answer <- ifelse(first_ans_score > 0, 'first answer is answer', 'not answer')
+  return(answer)
+})
+
+true_one <- subset(true_answered, answer_count == 1)
+true_more <- subset(true_answered, answer_count > 1)
+true_answered$which_answer <- ans_true_index
+
+# find proportion of questions marked true for is_answered that had first answer do that
+first <- subset(true_answered, which_answer == 'first answer is answer')
+prop_first_over_total <- length(first$comment_count)/length(true_answered$comment_count) # 81%
+
+# find those that do not have first answer as answer
+not_first <- subset(true_answered, which_answer == 'not answer')
+
+mult_ans <- subset(true_answered, answer_count > 1)
+length(mult_ans$comment_count)/length(true_answered$comment_count)
+
+# find how many Qs have more answers after first
+first_mult_answers <- subset(first, answer_count > 1)
+prop_first_mult_ans <- length(first_mult_answers$comment_count)/length(true_answered$comment_count) # 37%
+
+not_first_mult <- subset(not_first, answer_count > 2)
+prop_not_mult_ans <- length(not_first_mult$comment_count)/length(not_first$comment_count) # 5%
+
+# compare to those that have false for is_answered
+false_mult_ans <- subset(has_false_answered, answer_count > 1)
+prop_false_mult_ans <- length(false_mult_ans$comment_count)/length(has_false_answered$comment_count) #21% of subset
+
+# find statistical info about both sets
+mean_sd_false <- has_false_answered %>%
+  summarise(
+    mean_count = mean(answer_count),
+    sd_count = sd(answer_count),
+    min_count = min(answer_count),
+    max_count = max(answer_count),
+  )
+
+mean_sd_true <- true_answered %>%
+  summarise(
+    mean_count = mean(answer_count),
+    sd_count = sd(answer_count),
+    min_count = min(answer_count),
+    max_count = max(answer_count),
+  )
+
+mean_sd_true # mean = 1.89, sd = 1.43, min = 1, max = 31
+mean_sd_false # mean = 1.26, sd = 0.56, min = 1, max = 6
+
+```
+
+## Parsing tag info
+
+```{r}
+# using those that are answerd and those that have answers but not marked answered
+
+# coerce lists of tags to vectors
+true_answered_tags <- unlist(true_answered$tags)
+
+has_false_answered_tags <- unlist(has_false_answered$tags)
+
+no_answer_tags <- unlist(no_answers$tags)
+
+# coerce to tibble
+true_tags_tibble <- tibble("true_tags" = true_answered_tags)
+false_tags_tibble <- tibble("false_tags" = has_false_answered_tags)
+no_ans_tag_tibble <- tibble("no_ans_tags" = no_answer_tags)
+
+t_tags_count <- true_tags_tibble %>%
+  count(true_tags, sort = TRUE)
+
+t_tags_count <- t_tags_count[-1,]
+
+t_tags_count$rel <- t_tags_count$n/length(true_tags_tibble$true_tags)
+
+f_tags_count <- false_tags_tibble %>%
+  count(false_tags, sort = TRUE)
+
+f_tags_count <- f_tags_count[-1,]
+
+f_tags_count$rel <- f_tags_count$n/length(false_tags_tibble$false_tags)
+
+no_ans_count <- no_ans_tag_tibble %>%
+  count(no_ans_tags, sort = TRUE)
+
+no_ans_count <- no_ans_count[-1,]
+
+no_ans_count$rel <- no_ans_count$n/length(no_ans_tag_tibble$no_ans_tags)
+
+library(ggplot2)
+plt_1 <- t_tags_count %>%
+  head(15) %>%
+  ggplot(aes(x = true_tags, y = rel)) +
+  geom_col() +
+  labs(x = "Tag Names", y = "Relative Frequencies",
+       title = NULL) +
+  coord_flip()
+plt_1
+
+plt_2 <- f_tags_count %>%
+  head(15) %>%
+  ggplot(aes(x = false_tags, y = rel)) +
+  geom_col() +
+  labs(x = "Tag Names", y = "Relative Frequencies",
+       title = NULL) +
+  coord_flip()
+
+plt_3 <- no_ans_count %>%
+  head(15) %>%
+  ggplot(aes(x = no_ans_tags, y = rel)) +
+  geom_col() +
+  labs(x = "Tag Names", y = "Relative Frequencies",
+       title = NULL) +
+  coord_flip()
+
+library(cowplot)
+
+f_plot <- plot_grid(plt_1, plt_2, plt_3, labels = "AUTO")
+save_plot('tagsPlot.jpg', f_plot)
+
+```
+
+## Pulling out code fragments
+
+```{r}
+
+library(stringr)
+# pull out code into separate column
+code <- str_locate_all(true_answered$body, "<code>")
+code_end <- str_locate_all(true_answered$body, "<\\/code>")
+
+code_frags <- tibble()
+
+for(i in 1:length(code)){
+  i_val <- length(code[[i]])/2
+  if(i_val == 0){
+  }
+  else{
+    for(j in 1:i_val){
+      code_list <- tibble("title" = true_answered$title[i], "code" = substring(true_answered$body[i],
+                                                                               code[[i]][j,2]+1,
+                                                                               code_end[[i]][j,1]-1))
+      code_frags <- rbind(code_frags, code_list)   
+    }
+  }
+}
+
+# get number of code fragments per question
+num_code_frags <- code_frags %>%
+  group_by(title) %>%
+  tally()
+
+stats_code_frags <- num_code_frags %>%
+  summarise(
+    mean_code_frags = mean(n),
+    sd_code_frags = sd(n),
+    min_code_frags = min(n),
+    max_code_frags = max(n)
+  )
+
+# mean: 3.504323,	sd: 3.286319,	min: 1,	max: 70
+
+write.csv(code_frags, 'code_frags.csv')
+#code_frags <- read.csv('code_frags.csv', stringsAsFactors = F)
+
+```
+
+## Has answers but not "answered" code frags
+
+```{r}
+
+# pull out code into separate column
+hf_code <- str_locate_all(has_false_answered$body, "<code>")
+hf_code_end <- str_locate_all(has_false_answered$body, "<\\/code>")
+
+hf_code_frags <- tibble()
+
+for(i in 1:length(hf_code)){
+  i_val <- length(hf_code[[i]])/2
+  if(i_val == 0){
+  }
+  else{
+    for(j in 1:i_val){
+    hf_code_list <- tibble("title" = has_false_answered$title[i], "code" = substring(has_false_answered$body[i],
+                                                                                     hf_code[[i]][j,2]+1,
+                                                                                     hf_code_end[[i]][j,1]-1))
+    hf_code_frags <- rbind(hf_code_frags, hf_code_list)   
+    }
+  }
+}
+
+# get number of code fragments per question
+num_hf_code_frags <- hf_code_frags %>%
+  group_by(title) %>%
+  tally()
+
+hf_stats_code_frags <- num_hf_code_frags %>%
+  summarise(
+    mean_code_frags = mean(n),
+    sd_code_frags = sd(n),
+    min_code_frags = min(n),
+    max_code_frags = max(n)
+  )
+
+write.csv(hf_code_frags, 'hf_code_frags.csv')
+# hf_code_frags <- read.csv("hf_code_frags.csv", stringsAsFactors = F)
+# mean: 3.148204	sd: 3.00185	min: 1	max: 47
+
+```
+
+## no answers code frags
+
+```{r}
+library(stringr)
+# pull out code into separate column
+no_code <- str_locate_all(no_answers$body, "<code>")
+no_code_end <- str_locate_all(no_answers$body, "<\\/code>")
+
+no_code_frags <- tibble()
+
+for(i in 1:length(no_code)){
+  i_val <- length(no_code[[i]])/2
+  if(i_val == 0){
+  }
+  else{
+    for(j in 1:i_val){
+    no_code_list <- tibble("title" = no_answers$title[i], "code" = substring(no_answers$body[i],
+                                                                                     no_code[[i]][j,2]+1,
+                                                                                     no_code_end[[i]][j,1]-1))
+    no_code_frags <- rbind(no_code_frags, no_code_list)   
+    }
+  }
+}
+
+# get number of code fragments per question
+num_no_code_frags <- no_code_frags %>%
+  group_by(title) %>%
+  tally()
+
+no_stats_code_frags <- num_no_code_frags %>%
+  summarise(
+    mean_code_frags = mean(n),
+    sd_code_frags = sd(n),
+    min_code_frags = min(n),
+    max_code_frags = max(n)
+  )
+
+write.csv(no_code_frags, 'no_code_frags.csv')
+no_code_frags <- read.csv('no_code_frags.csv', stringsAsFactors = F)
+
+stats_no_code_frags <- num_no_code_frags %>%
+  summarise(
+    mean_code_frags = mean(n),
+    sd_code_frags = sd(n),
+    min_code_frags = min(n),
+    max_code_frags = max(n)
+  )
+stats_no_code_frags
+# mean = 3.38, sd = 3.14, min = 1, max = 29
+
+```
+
+## paste code frags and 
+
+```{r}
+
+library(tidytext)
+library(ggplot2)
+library(dplyr)
+
+code_frags_clean <- code_frags %>%
+  unnest_tokens(word, code)
+
+hf_code_frags_clean <- hf_code_frags %>%
+  unnest_tokens(word, code)
+
+no_code_frag_clean <- no_code_frags %>%
+  unnest_tokens(word, code)
+
+# count and plot
+code_frags_clean %>%
+  count(word, sort = TRUE) %>%
+  top_n(15) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(x = word, y = n)) +
+  geom_col() +
+  xlab(NULL) +
+  coord_flip() +
+  labs(x = "Count",
+       y = "Unique Words",
+       title = "Count of unique words from stack overflow code")
+
+# count and plot
+hf_code_frags_clean %>%
+  count(word, sort = TRUE) %>%
+  top_n(15) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(x = word, y = n)) +
+  geom_col() +
+  xlab(NULL) +
+  coord_flip() +
+  labs(x = "Count",
+       y = "Unique Words",
+       title = "Count of unique words from stack overflow code")
+
+# exploring networks
+library(widyr)
+library(tidytext)
+code_clean_paired <- code_frags %>%
+  unnest_tokens(paired_words, code, token = "ngrams", n = 2) %>%
+  na.omit()
+
+hf_clean_paired <- hf_code_frags %>%
+  unnest_tokens(paired_words, code, token = "ngrams", n = 2) %>%
+  na.omit()
+
+no_clean_paired <- no_code_frags %>%
+  unnest_tokens(paired_words, code, token = "ngrams", n = 2) %>%
+  na.omit()
+
+# separate words
+library(tidyr)
+code_separated_words <- code_clean_paired %>%
+  separate(paired_words, c("word1", "word2"), sep = " ") %>%
+    filter(word1 == "import" | word1 == "from")
+
+hf_code_sep_words <- hf_clean_paired %>%
+  separate(paired_words, c("word1", "word2"), sep = " ") %>%
+  filter(word1 == "import" | word1 == "from")
+
+no_code_sep_words <- no_clean_paired %>%
+  separate(paired_words, c("word1", "word2"), sep = " ") %>%
+  filter(word1 == "import" | word1 == "from")
+
+
+# new bigram counts
+code_words_counts <- code_separated_words %>%
+  count(word1, word2, sort = TRUE) %>%
+  unite("paired_words", c(word1, word2), sep = " ")
+
+hf_code_counts <- hf_code_sep_words %>%
+  count(word1, word2, sort = TRUE) %>%
+  unite("paired_words", c(word1, word2), sep = " ")
+
+no_code_counts <- no_code_sep_words %>%
+  count(word1, word2, sort = TRUE) %>%
+  unite("paired_words", c(word1, word2), sep = " ")
+
+```
+
+## Plotting the Data
+
+```{r}
+library(ggplot2)
+
+top_20_code <- code_words_counts %>%
+  head(20)
+
+top_20_hf <- hf_code_counts %>%
+  head(20)
+
+top_20_no <- no_code_counts %>%
+  head(20)
+
+write.csv(top_20_code, "top_20_out_code.csv")
+write.csv(top_20_hf, "top_20_out_hf.csv")
+write.csv(top_20_no, "top_20_out_no.csv")
+
+# top_20_code <- read.csv("top_20_code.csv", stringsAsFactors = F)
+# top_20_hf <- read.csv("top_20_hf.csv", stringsAsFactors = F)
+# top_20_no <- read.csv("top_20_no.csv", stringsAsFactors = F)
+
+top_20_code
+top_20_hf
+top_20_no
+
+```
+
+```{r}
+
+# get names of imports for analysis
+code_lab_names <- lapply(top_20_code$paired_words, function(x){
+  x <- strsplit(x, split = " ")[[1]][2]
+  return(x)
+})
+
+hf_lab_names <- lapply(top_20_hf$paired_words, function(x){
+  x <- strsplit(x, split = " ")[[1]][2]
+  return(x)
+})
+
+no_lab_names <- lapply(top_20_no$paired_words, function(x){
+  x <- strsplit(x, split = " ")[[1]][2]
+  return(x)
+})
+
+# preparing plots
+top_20_code$names <- unlist(code_lab_names)
+top_20_hf$names <- unlist(hf_lab_names)
+top_20_no$names <- unlist(no_lab_names)
+
+top_20_code$rel <- top_20_code$n/sum(code_words_counts$n)
+top_20_hf$rel <- top_20_hf$n/sum(hf_code_counts$n)
+top_20_no$rel <- top_20_no$n/sum(no_code_counts$n)
+
+library(ggplot2)
+plot_1 <- top_20_code %>%
+  ggplot(aes(x = names, y = rel)) +
+  geom_col() +
+  labs(x = "Packages", y = "Relative Frequencies",
+       title = NULL) +
+  coord_flip()
+
+plot_2 <- top_20_hf %>%
+  ggplot(aes(x = names, y = rel)) +
+  geom_col() +
+  labs(x = "Packages", y = "Relative Frequencies",
+       title = NULL) +
+  coord_flip()
+
+plot_3 <- top_20_no %>%
+  ggplot(aes(x = names, y = rel)) +
+  geom_col() +
+  labs(x = "Packages", y = "Relative Frequencies",
+       title = NULL) +
+  coord_flip()
+
+library(cowplot)
+
+fi_plot <- plot_grid(plot_1, plot_2, plot_3, labels = "AUTO")
+save_plot('importsPlot.jpg', fi_plot)
+
+```
+
+## now let's do def and classes
+
+```{r}
+
+# separate words
+library(tidyr)
+code_sep_words <- code_clean_paired %>%
+  separate(paired_words, c("word1", "word2"), sep = " ") %>%
+    filter(word1 == "def" | word1 == "class")
+
+hf_sep_words <- hf_clean_paired %>%
+  separate(paired_words, c("word1", "word2"), sep = " ") %>%
+  filter(word1 == "def" | word1 == "class")
+
+no_sep_words <- no_clean_paired %>%
+  separate(paired_words, c("word1", "word2"), sep = " ") %>%
+  filter(word1 == "def" | word1 == "class")
+
+# new bigram counts
+code_words_class_counts <- code_sep_words %>%
+  count(word1, word2, sort = TRUE) %>%
+  unite("paired_words", c(word1, word2), sep = " ")
+
+hf_code_class_counts <- hf_sep_words %>%
+  count(word1, word2, sort = TRUE) %>%
+  unite("paired_words", c(word1, word2), sep = " ")
+
+no_code_class_counts <- no_sep_words %>%
+  count(word1, word2, sort = TRUE) %>%
+  unite("paired_words", c(word1, word2), sep = " ")
+
+```
+
+## Preparing to Plot
+
+```{r}
+
+library(ggplot2)
+
+top_20_class_code <- code_words_class_counts %>%
+  head(15)
+
+top_20_class_hf <- hf_code_class_counts %>%
+  head(15)
+
+top_20_class_no <- no_code_class_counts %>%
+  head(15)
+
+write.csv(top_20_class_code, "top_20_class_code.csv")
+write.csv(top_20_class_hf, "top_20_class_hf.csv")
+write.csv(top_20_class_no, "top_20_class_no.csv")
+
+# top_20_code <- read.csv("top_20_code.csv", stringsAsFactors = F)
+# top_20_hf <- read.csv("top_20_hf.csv", stringsAsFactors = F)
+# top_20_no <- read.csv("top_20_no.csv", stringsAsFactors = F)
+
+top_20_class_code
+top_20_class_hf
+top_20_class_no
+
+```
+
+## Plottings!
+
+```{r}
+
+# get names of imports for analysis
+code_lab_class_names <- lapply(top_20_class_code$paired_words, function(x){
+  x <- strsplit(x, split = " ")[[1]][2]
+  return(x)
+})
+
+hf_lab_class_names <- lapply(top_20_class_hf$paired_words, function(x){
+  x <- strsplit(x, split = " ")[[1]][2]
+  return(x)
+})
+
+no_lab_class_names <- lapply(top_20_class_no$paired_words, function(x){
+  x <- strsplit(x, split = " ")[[1]][2]
+  return(x)
+})
+
+# preparing plots
+top_20_class_code$names <- unlist(code_lab_class_names)
+top_20_class_hf$names <- unlist(hf_lab_class_names)
+top_20_class_no$names <- unlist(no_lab_class_names)
+
+top_20_class_code$rel <- top_20_class_code$n/sum(code_words_class_counts$n)
+top_20_class_hf$rel <- top_20_class_hf$n/sum(hf_code_class_counts$n)
+top_20_class_no$rel <- top_20_class_no$n/sum(no_code_class_counts$n)
+
+library(ggplot2)
+plot_1 <- top_20_class_code %>%
+  ggplot(aes(x = names, y = rel)) +
+  geom_col() +
+  labs(x = "Declarations", y = "Relative Frequencies",
+       title = NULL) +
+  coord_flip()
+
+plot_2 <- top_20_class_hf %>%
+  ggplot(aes(x = names, y = rel)) +
+  geom_col() +
+  labs(x = "Declarations", y = "Relative Frequencies",
+       title = NULL) +
+  coord_flip()
+
+plot_3 <- top_20_class_no %>%
+  ggplot(aes(x = names, y = rel)) +
+  geom_col() +
+  labs(x = "Declarations", y = "Relative Frequencies",
+       title = NULL) +
+  coord_flip()
+
+library(cowplot)
+
+final_plot <- plot_grid(plot_1, plot_2, plot_3, labels = "AUTO")
+save_plot('declarationsPlot.jpg', final_plot)
+final_plot
+
+```
+
+## Check for Duplicates?
+
+```{r}
+length(true_answered$comment_count) +
+length(has_false_answered$comment_count) +
+length(no_answers$comment_count)
+
+```
+
+# What Can Topic Modelling Show Us?
+
+In the words of literary scholar and digital humanist Paul Barrett, Topic Modeling is:
+
+"...a form of unsupervised machine learning. It is a kind of text mining that doesn't search for particular, predetermined content, but instead 'reads' an entire corpus and extracts a set of topics. Its unclear, and a point of debate, whether the topics are read / discovered from the corpus or whether the topics are 'asserted' as a description of the corpus."
+
+At this stage of my research, I'm wanting to understand perhaps how many comments have to do with coding and if other types of topics emerge. In essence, could topic modeling, a form of unsupervised, natural language processing learning, help me discover communicaction objects centered around coding concepts and those that are not?
+
+To get started, I need to reshape some of the data and determine the number of clusters the model should make.
+
+```{r}
+# STM topic model performance evaluation
+library(tidytext)
+library(dplyr)
+
+# for now, just considering SO comments (answe comments)
+dset <- big_ac[sample(nrow(big_ac), 1000),]
+dset$ID <- 1:1000
+
+```
+
+```{r}
+library(stringr)
+# pull out code tags...
+code <- str_locate_all(dset$body, "<code>")
+code_end <- str_locate_all(dset$body, "<\\/code>")
+dset$body <- gsub("<code>", '', dset$body)
+dset$body <- gsub("</code>", '', dset$body)
+
+```
+
+```{r}
+# get word frequency counts for comments
+tidy_dset <- dset %>%
+  unnest_tokens(word, body) %>%
+  anti_join(get_stopwords()) %>%
+  add_count(word) %>%
+  filter(n > 100) %>%
+  select(-n)
+
+# generate sparse document term matrices
+comments_sparse <- tidy_dset %>%
+  count(ID, word) %>%
+  cast_sparse(ID, word, n)
+
+library(stm)
+library(furrr)
+
+# run our structural topic models with a bunch of different topics for evaluation later
+
+set.seed(1234)
+many_models <- tibble(K = c(10, 20, 30, 40, 50)) %>%
+  mutate(topic_model = future_map(K,
+                                  ~stm(comments_sparse, K = .,
+                                       verbose = FALSE)))
+
+# create heldout test sets for evaluation and model performance diagnostics
+heldout <- make.heldout(comments_sparse)
+
+```
+
+Now we need to determine the number of topic models to make for charted and uncharted songs.
+
+```{r}
+
+# evaluate our many models for charted based on semantic coherence, heldout likelihood, residual performance, and lower bound
+# through research, I discovered that the metrics sought here are good indicators of different model sizes' success.
+k_result <- many_models %>%
+  mutate(exclusivity = map(topic_model, exclusivity),
+         semantic_coherence = map(topic_model, semanticCoherence, comments_sparse),
+         eval_heldout = map(topic_model, eval.heldout, heldout$missing),
+         residual = map(topic_model, checkResiduals, comments_sparse),
+         bound =  map_dbl(topic_model, function(x) max(x$convergence$bound)),
+         lfact = map_dbl(topic_model, function(x) lfactorial(x$settings$dim$K)),
+         lbound = bound + lfact,
+         # set iterations to length of bound
+         iterations = map_dbl(topic_model, function(x) length(x$convergence$bound)))
+
+# plotting diagnostics
+k_result %>%
+  transmute(K,
+            `Lower bound` = lbound,
+            Residuals = map_dbl(residual, "dispersion"),
+            `Semantic coherence` = map_dbl(semantic_coherence, mean),
+            `Held-out likelihood` = map_dbl(eval_heldout, "expected.heldout")) %>%
+  gather(Metric, Value, -K) %>%
+  ggplot(aes(K, Value, color = Metric)) +
+  geom_line(size = 1.5, alpha = 0.7, show.legend = FALSE) +
+  facet_wrap(~Metric, scales = "free_y") +
+  labs(x = "K (number of topics)",
+       y = NULL,
+       title = "Model diagnostics by number of topics")
+
+# plotting sematic coherence against exclusivity to choose number of topics
+k_result %>%
+  select(K, exclusivity, semantic_coherence) %>%
+  filter(K %in% c(10, 20, 40, 50, 60, 70, 80, 100, 120, 150)) %>%
+  unnest() %>%
+  mutate(K = as.factor(K)) %>%
+  ggplot(aes(semantic_coherence, exclusivity, color = K)) +
+  geom_point(size = 2, alpha = 0.7) +
+  labs(x = "Semantic coherence",
+       y = "Exclusivity",
+       title = "Comparing exclusivity and semantic coherence among answer comments",
+       subtitle = "Models with fewer topics have higher semantic coherence for more topics, but lower exclusivity")
+
+```
+
+We're checking for a lot with these graphs. Semantic coherence measures the frequency of probable words in a given topic co-occurring together across our corpus. We want that to be high when determining the number of topics to make. We also want held-out likelihood to be high, meaning that the topic model will perform well on data that we have withheld from the model for testing. We want our residuals to be low though. Based on this first graph, we might be okay setting # topics for our model. The second graph, which plots exclusivity scores against semantic coherence scores, seems to suggest this too. As you can see the grouping of dots that have the highest exclusivity (highest degree of exclusion among words per topics) and highest semantic coherence represent our model when trained with # clusters. So, let's build our new model with # clusters and see some results!
+
+```{r}
+# choosing topic model with best number of topics
+topic_model <- k_result %>%
+  filter(K == 120) %>%
+  pull(topic_model) %>%
+  .[[1]]
+
+topic_model
+
+# separate charted topic model into beta and gamma
+td_beta <- tidy(topic_model)
+
+td_gamma <- tidy(topic_model, matrix = "gamma",
+                 document_names =
+                   rownames(comments_sparse))
+
+#plotting words
+library(ggthemes)
+library(dplyr)
+library(tidyverse)
+library(scales)
+library(knitr)
+
+# derive top terms from beta
+top_terms <- td_beta %>%
+  arrange(beta) %>%
+  group_by(topic) %>%
+  top_n(10, beta) %>%
+  arrange(-beta) %>%
+  select(topic, term) %>%
+  summarise(terms = list(term)) %>%
+  mutate(terms = map(terms, paste, collapse = ", ")) %>% 
+  unnest()
+
+# derive distribution information from gamma scores
+gamma_terms <- td_gamma %>%
+  group_by(topic) %>%
+  summarise(gamma = mean(gamma)) %>%
+  arrange(desc(gamma)) %>%
+  left_join(top_terms, by = "topic") %>%
+  mutate(topic = paste0("Topic ", topic),
+         topic = reorder(topic, gamma))
+
+# get top 20 topics by gamma scores
+gamma_terms %>%
+  top_n(20, gamma) %>%
+  ggplot(aes(topic, gamma, label = terms, fill = topic)) +
+  geom_col(show.legend = FALSE) +
+  geom_text(hjust = 0, nudge_y = 0.0005, size = 3) +
+  coord_flip() +
+  scale_y_continuous(expand = c(0,0),
+                     limits = c(0, 0.09),
+                     labels = percent_format()) +
+  theme_tufte(ticks = FALSE) +
+  theme(plot.title = element_text(size = 16),
+        plot.subtitle = element_text(size = 13)) +
+  labs(x = NULL, y = expression(gamma),
+       title = "Top 20 topics by prevalence in the Stack Overflow Python thread",
+       subtitle = "With the top words that contribute to each topic")
+
+gamma_terms %>%
+  select(topic, gamma, terms) %>%
+  kable(digits = 3, 
+        col.names = c("Topic", "Expected topic proportion", "Top 7 terms"))
+
+```
+
+>>>>>>> 45937f67707ae2982f4025ca86164d8258627f3a
