@@ -1,2 +1,2 @@
-# stackExample
-An initial analysis of stack overflow questions, comments, and answers.
+# stackAnalysis
+An analysis of Stack Overflow communications collected from their API.
