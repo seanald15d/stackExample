@@ -90,6 +90,16 @@ date_count <- arrange_date %>%
   group_by(creation_date_just) %>%
   count()
 
+date_count$n[2]/sum(date_count$n)
+sum(date_count$n)
+
+date_count$log_likelihood <- log(date_count$n/sum(date_count$n))
+date_count$raw_prob <- (date_count$n/sum(date_count$n))*100
+
+date_count %>%
+  arrange(desc(raw_prob))
+range(date_count$raw_prob)
+
 ```
 
 ### Read in work
