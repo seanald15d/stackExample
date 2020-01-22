@@ -96,9 +96,31 @@ sum(date_count$n)
 date_count$log_likelihood <- log(date_count$n/sum(date_count$n))
 date_count$raw_prob <- (date_count$n/sum(date_count$n))*100
 
-date_count %>%
-  arrange(desc(raw_prob))
+mean_rp <- mean(date_count$raw_prob)
 range(date_count$raw_prob)
+sd_rp <- sd(date_count$raw_prob)
+
+no_outliers <- subset(date_count, raw_prob > 2*sd_rp + mean_rp | raw_prob < mean_rp - (2*sd_rp))
+
+library(ggplot2)
+
+date_count %>%
+  ggplot(aes(n)) +
+  geom_histogram(bins = 90) +
+  labs(
+    x = 'Number of Questions Obtained',
+    y = 'Number of Occurrences',
+    title = 'Histogram of Number of Questions Obtained'
+    )
+
+date_count %>%
+ggplot(aes(x = creation_date_just, y = n)) +
+  geom_point(colour = "orange") +
+  geom_smooth(aes(x = creation_date_just, y = n), method = "lm") +
+    labs(
+    x = 'Query Date',
+    y = 'Number of Questions Obtained',
+    title = 'Date x Number of Results')
 
 ```
 
